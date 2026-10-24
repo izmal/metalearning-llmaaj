@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import random
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -38,7 +39,7 @@ def _cache_path(payload):
 
 
 def generate(prompt, system=None, model=None, thinking="minimal", json_mode=True,
-             temperature=0.0, max_tokens=2048, seed=0):
+             temperature=0.0, max_tokens=2048, seed=0, retries=8):
     """Return the model's text. `thinking` is "minimal" or "high" (Gemma 4 rejects other values)."""
     model = model or JUDGE_MODEL
     payload = {"m": model, "s": system, "p": prompt, "t": thinking, "j": json_mode,
@@ -50,7 +51,7 @@ def generate(prompt, system=None, model=None, thinking="minimal", json_mode=True
         temperature=temperature, max_output_tokens=max_tokens, system_instruction=system,
         thinking_config=types.ThinkingConfig(thinking_level=thinking),
         response_mime_type="application/json" if json_mode else None)
-    for attempt in range(8):
+    for attempt in range(retries):
         try:
             response = client().models.generate_content(model=model, contents=prompt, config=config)
             text = response.text or ""
@@ -59,12 +60,24 @@ def generate(prompt, system=None, model=None, thinking="minimal", json_mode=True
             break
         except (errors.APIError, ValueError) as error:
             code = getattr(error, "code", None)
-            if attempt == 7 or (isinstance(code, int) and 400 <= code < 500 and code != 429):
+            if attempt == retries - 1 or (isinstance(code, int) and 400 <= code < 500 and code != 429):
                 raise
             time.sleep(min(60, 2 ** attempt + random.random()))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"payload": payload, "text": text}, ensure_ascii=False))
     return text
+
+
+def generate_json(prompt, models, **kwargs):
+    """Parsed JSON from the first model that answers; the large model is often overloaded (500/503)."""
+    last = None
+    for model in models:
+        try:
+            return parse_json(generate(prompt, model=model, retries=4, **kwargs))
+        except Exception as error:
+            last = error
+            print(f"{model} failed: {str(error)[:120]}", file=sys.stderr)
+    raise last
 
 
 def parse_json(text):
