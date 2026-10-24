@@ -79,6 +79,23 @@ def build(rows, candidates, rulebook, prompts_text, self_check):
     misses = [(item_id, r) for item_id, r in checked.items() if r["label"] != by_id[item_id]["label"]]
     if not misses:
         out += ["No disagreements on the training set.", ""]
+    too_strict = defaultdict(int)
+    too_lenient = defaultdict(int)
+    for item_id, result in misses:
+        if by_id[item_id]["label"] == "good":
+            for rule_id in {v.get("rule") for v in result["violations"]}:
+                too_strict[rule_id] += 1
+        else:
+            too_lenient[by_id[item_id]["topic"]] += 1
+    if too_strict:
+        out.append("**Rules stricter than the expert** (expert said good, rule fired): "
+                   + ", ".join(f"{rule} ×{n}" for rule, n in sorted(too_strict.items(), key=lambda x: -x[1]))
+                   + ". In these cases the expert accepted replies that only partly follow the rule, "
+                     "so treat these rules as soft boundaries; the examples below show where.")
+    if too_lenient:
+        out.append("**Expert problems the rules miss** (expert said bad, no rule fired), by topic: "
+                   + ", ".join(f"{topic} ×{n}" for topic, n in sorted(too_lenient.items(), key=lambda x: -x[1])) + ".")
+    out.append("")
     for item_id, result in sorted(misses, key=lambda x: by_id[x[0]]["topic"]):
         row = by_id[item_id]
         if row["label"] == "bad":
