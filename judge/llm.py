@@ -16,6 +16,7 @@ JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "gemma-4-26b-a4b-it")
 INDUCE_MODEL = os.environ.get("INDUCE_MODEL", "gemma-4-31b-it")
 CACHE_DIR = Path(os.environ.get("LLM_CACHE_DIR", ".cache/llm"))
 MAX_WORKERS = int(os.environ.get("LLM_MAX_WORKERS", "8"))
+REQUEST_TIMEOUT_S = int(os.environ.get("LLM_REQUEST_TIMEOUT_S", "120"))
 
 _client = None
 _client_lock = threading.Lock()
@@ -29,7 +30,8 @@ def client():
             key = os.environ.get("GEMINI_API_KEY")
             if not key:
                 raise SystemExit("GEMINI_API_KEY is not set")
-            _client = genai.Client(api_key=key)
+            # A per-request timeout: with thinking on, some prompts otherwise hang for many minutes.
+            _client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_S * 1000))
     return _client
 
 
@@ -58,7 +60,7 @@ def generate(prompt, system=None, model=None, thinking="minimal", json_mode=True
             if json_mode and not text.strip():
                 raise ValueError(f"empty response, finish={response.candidates[0].finish_reason}")
             break
-        except (errors.APIError, ValueError) as error:
+        except Exception as error:  # API errors, timeouts, empty answers
             code = getattr(error, "code", None)
             if attempt == retries - 1 or (isinstance(code, int) and 400 <= code < 500 and code != 429):
                 raise

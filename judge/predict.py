@@ -16,11 +16,15 @@ def load_prompts(artifacts):
 
 
 def judge(row, prompts):
-    text = generate(render(row), system=prompts[row["topic"]], thinking=JUDGE_THINKING, max_tokens=8192)
-    try:
-        violations = parse_json(text).get("violations") or []
-    except ValueError:
-        violations = []
+    violations = []
+    # If careful (thinking) judging fails or times out, retry fast; if that fails too, default to "good".
+    for thinking, retries in ((JUDGE_THINKING, 2), ("minimal", 4)):
+        try:
+            text = generate(render(row), system=prompts[row["topic"]], thinking=thinking, max_tokens=8192, retries=retries)
+            violations = parse_json(text).get("violations") or []
+            break
+        except Exception as error:
+            print(f"judge {row['item_id']} thinking={thinking} failed: {str(error)[:100]}", file=sys.stderr)
     # The label follows from the violations alone, so the explanation matches the decision rule exactly.
     return {"item_id": row["item_id"], "label": "bad" if violations else "good", "violations": violations}
 
