@@ -16,8 +16,11 @@ calendar month", "funds on hold are not available to spend", "a fixed-term depos
 | Plain Gemma 4 (`gemma-4-26b-a4b-it`), generic prompt, no rules | 0.770 |
 | + learned rulebook, no thinking | 0.723 (too strict: 20 false `bad`) |
 | **+ learned rulebook, thinking + verify-before-flag** | **0.872** |
+| Same pipeline, full Docker run from scratch (rulebook re-learned, empty cache) | 0.809 |
 
-Per topic (last row): credit 0.933, financial_position 0.727, savings 1.000, spending 0.826.
+Per topic, best run: credit 0.933, financial_position 0.727, savings 1.000, spending 0.826.
+Docker run: credit 0.933, financial_position 0.818, savings 0.700, spending 0.783. The rulebook is re-learned on every
+`adapt`, and Gemma fallbacks under API overload change it, so expect run-to-run variance of several points.
 
 ## How it works
 
@@ -55,7 +58,7 @@ python3 src/evaluate.py --test data/public_test.csv --predictions out/output/pre
 Configuration (environment variables, see [.env.example](.env.example)): `GEMINI_API_KEY` (required), `JUDGE_MODEL`,
 `INDUCE_MODEL`, `JUDGE_THINKING` (`high`|`minimal`), `LLM_MAX_WORKERS` (default 4; lower it if you hit 429),
 `LLM_REQUEST_TIMEOUT_S`. Rate limits (429) are waited out; failed or timed-out careful judgments retry without thinking.
-Expect roughly 10 minutes for `adapt` on 190 examples and 10–15 minutes for `eval` on 296, depending on API quota.
+Timing depends heavily on API quota. Measured on a free-tier key shared with another project: `adapt` 56 min (150 examples, many 429/500 waits), `eval` 7.5 min (80 examples). Use a dedicated paid-tier key for the final run.
 
 ## Limits
 
