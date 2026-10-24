@@ -15,7 +15,7 @@ from google.genai import errors, types
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "gemma-4-26b-a4b-it")
 INDUCE_MODEL = os.environ.get("INDUCE_MODEL", "gemma-4-31b-it")
 CACHE_DIR = Path(os.environ.get("LLM_CACHE_DIR", ".cache/llm"))
-MAX_WORKERS = int(os.environ.get("LLM_MAX_WORKERS", "8"))
+MAX_WORKERS = int(os.environ.get("LLM_MAX_WORKERS", "4"))
 REQUEST_TIMEOUT_S = int(os.environ.get("LLM_REQUEST_TIMEOUT_S", "120"))
 
 _client = None
@@ -53,7 +53,8 @@ def generate(prompt, system=None, model=None, thinking="minimal", json_mode=True
         temperature=temperature, max_output_tokens=max_tokens, system_instruction=system,
         thinking_config=types.ThinkingConfig(thinking_level=thinking),
         response_mime_type="application/json" if json_mode else None)
-    for attempt in range(retries):
+    attempt = rate_waits = 0
+    while True:
         try:
             response = client().models.generate_content(model=model, contents=prompt, config=config)
             text = response.text or ""
@@ -62,7 +63,13 @@ def generate(prompt, system=None, model=None, thinking="minimal", json_mode=True
             break
         except Exception as error:  # API errors, timeouts, empty answers
             code = getattr(error, "code", None)
-            if attempt == retries - 1 or (isinstance(code, int) and 400 <= code < 500 and code != 429):
+            if code == 429 and rate_waits < 12:
+                # Per-minute quota: wait it out without spending a retry (up to ~6 minutes in total).
+                rate_waits += 1
+                time.sleep(20 + 20 * random.random())
+                continue
+            attempt += 1
+            if attempt >= retries or (isinstance(code, int) and 400 <= code < 500):
                 raise
             time.sleep(min(60, 2 ** attempt + random.random()))
     path.parent.mkdir(parents=True, exist_ok=True)

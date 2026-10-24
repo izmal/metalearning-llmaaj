@@ -1,4 +1,72 @@
-# A Judge That Learns from an Expert
+# Judge Forge — a Gemma 4 judge that learns an expert's rules
+
+**What it is.** A solution to Plata's "A Judge That Learns from an Expert" challenge. `adapt` reads the expert's labeled
+conversations, works out *why* each bad one is bad, and writes the result down as a short, human-readable rulebook per
+topic, each rule linked to the training examples behind it. `eval` labels new conversations with exactly that rulebook.
+Built for teams that need an LLM judge to match a domain expert, not the model's own taste.
+
+**Expertise → AI.** The expert's knowledge lives only in their labels. The rulebook (`/artifacts/rulebook.json`,
+explained in `/artifacts/explanation.md`) is that knowledge made explicit: e.g. "last month means the previous full
+calendar month", "funds on hold are not available to spend", "a fixed-term deposit cannot be withdrawn early".
+
+## Results on the public split (`public_test`, 80 conversations)
+
+| Judge | macro_topic_accuracy |
+|---|---|
+| Plain Gemma 4 (`gemma-4-26b-a4b-it`), generic prompt, no rules | 0.770 |
+| + learned rulebook, no thinking | 0.723 (too strict: 20 false `bad`) |
+| **+ learned rulebook, thinking + verify-before-flag** | **0.872** |
+
+Per topic (last row): credit 0.933, financial_position 0.727, savings 1.000, spending 0.826.
+
+## How it works
+
+```
+adapt  /input/train.jsonl → /artifacts
+  1. induce  every bad example → Gemma names the violated rule as a general statement (+ evidence quote)
+  2. merge   per topic → ≤12 prioritized rules, each linked to supporting training item_ids
+  3. render  judge_prompts.json (eval uses only this file)
+  4. explain run the same judge on the training set → explanation.md (rules, priorities, examples,
+             boundaries where rules and expert disagree, SHA-256 of the prompts)
+eval   /input/test.jsonl + /artifacts → /output/predictions.csv
+  rulebook of the topic + client context + whole conversation → list of violated rule ids → bad if any
+```
+
+Code: [judge/adapt.py](judge/adapt.py), [judge/predict.py](judge/predict.py), [judge/explain.py](judge/explain.py),
+model calls in [judge/llm.py](judge/llm.py).
+
+## Model and license
+
+- **Gemma 4 via the Gemini API**: `gemma-4-31b-it` for rule induction (falls back to `gemma-4-26b-a4b-it` when overloaded),
+  `gemma-4-26b-a4b-it` as the judge. Gemma terms: https://ai.google.dev/gemma/terms
+- Solution code (`judge/`, `Dockerfile`): Apache-2.0, see [LICENSE](LICENSE). The challenge files (`src/`, `data/`,
+  the task description below) belong to Plata and are not relicensed.
+
+## Run
+
+```sh
+docker build -t judge-forge .
+python3 src/prepare_inputs.py --train data/public_train.csv --test data/public_test.csv --out-dir out/public_input
+docker run --rm -e GEMINI_API_KEY -v "$PWD/out/public_input:/input:ro" -v "$PWD/out/artifacts:/artifacts" judge-forge adapt
+docker run --rm -e GEMINI_API_KEY -v "$PWD/out/public_input:/input:ro" -v "$PWD/out/artifacts:/artifacts:ro" -v "$PWD/out/output:/output" judge-forge eval
+python3 src/evaluate.py --test data/public_test.csv --predictions out/output/predictions.csv
+```
+
+Configuration (environment variables, see [.env.example](.env.example)): `GEMINI_API_KEY` (required), `JUDGE_MODEL`,
+`INDUCE_MODEL`, `JUDGE_THINKING` (`high`|`minimal`), `LLM_MAX_WORKERS` (default 4; lower it if you hit 429),
+`LLM_REQUEST_TIMEOUT_S`. Rate limits (429) are waited out; failed or timed-out careful judgments retry without thinking.
+Expect roughly 10 minutes for `adapt` on 190 examples and 10–15 minutes for `eval` on 296, depending on API quota.
+
+## Limits
+
+- Rules the training set never shows being broken cannot be learned; they surface only as misses in the "Boundaries"
+  section of `explanation.md`.
+- financial_position is the weakest topic (0.727): rules about holds and credit limits are applied less reliably.
+- Accuracy depends on Gemini API availability; under heavy 429/503 the judge degrades to fast mode instead of failing.
+
+---
+
+# A Judge That Learns from an Expert (original task)
 
 Infer an expert's evaluation rules from labeled conversations, then assign one of two labels to new conversations: `good` or `bad`. Evaluate the entire conversation. Any violation of an applicable rule makes the conversation `bad`.
 

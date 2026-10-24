@@ -3,6 +3,8 @@
 1. induce: for every `bad` example, Gemma names the violated rule as a general, reusable statement.
 2. merge:  per topic, the candidate rules are consolidated into a short prioritized rulebook,
            each rule linked to the training examples that illustrate it.
+3. explain: the judge runs on the training set with the saved prompts; the result and the rulebook
+           become explanation.md for the jury.
 """
 import argparse
 import json
@@ -12,6 +14,8 @@ from pathlib import Path
 
 from data import TOPICS, load_jsonl, render
 from llm import INDUCE_MODEL, JUDGE_MODEL, generate_json, pmap
+from explain import build
+from predict import predict
 from prompts import judge_prompt
 
 INDUCE_SYSTEM = """You help reverse-engineer the unwritten rules of a domain expert who reviews a Mexican digital bank's AI assistant.
@@ -89,7 +93,14 @@ def main():
     rulebook = {"topics": {t: {"rules": rules} for t, rules in merged}}
     (out / "rulebook.json").write_text(json.dumps(rulebook, ensure_ascii=False, indent=1))
     prompts = {t: judge_prompt(t, rulebook["topics"].get(t, {}).get("rules", [])) for t in TOPICS}
-    (out / "judge_prompts.json").write_text(json.dumps(prompts, ensure_ascii=False, indent=1))
+    prompts_text = json.dumps(prompts, ensure_ascii=False, indent=1)
+    (out / "judge_prompts.json").write_text(prompts_text)
+
+    # Self-check: the same judge and prompts eval will use, run on the training set, feed the jury explanation.
+    print(f"self-check on {len(rows)} training conversations", file=sys.stderr)
+    self_check = predict(rows, out)
+    (out / "train_self_check.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in self_check))
+    (out / "explanation.md").write_text(build(rows, candidates, rulebook, prompts_text, self_check))
     print(json.dumps({t: len(v["rules"]) for t, v in rulebook["topics"].items()}), file=sys.stderr)
 
 
